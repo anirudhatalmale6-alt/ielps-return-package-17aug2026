@@ -1,0 +1,25 @@
+--- billing.original.js	2026-08-17 07:36:07.426150012 +0000
++++ billing.patched.js	2026-08-17 07:36:07.485149302 +0000
+@@ -270,7 +270,21 @@
+     return res.json({ received: true, developmentMode: true });
+   }
+   const sig = req.headers['stripe-signature'];
+-  const event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
++  // A missing or unverifiable signature is a malformed request, not a fault on
++  // our side. Left to the global error handler it surfaces as 500, which tells
++  // Stripe the endpoint is broken and invites retries of an event this endpoint
++  // will never accept. Nothing has been read or written at this point, so
++  // rejecting here is free of side effects. Raw-body verification, the signing
++  // secret, idempotency and every downstream branch are unchanged.
++  let event;
++  try {
++    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
++  } catch {
++    return res.status(400).json({
++      error: 'invalid_signature',
++      message: sig ? 'Stripe signature verification failed.' : 'Missing Stripe-Signature header.',
++    });
++  }
+   const recorded = await query(
+     'INSERT INTO billing_events (stripe_event_id, type, payload) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING RETURNING stripe_event_id',
+     [event.id, event.type, JSON.stringify(event)]
